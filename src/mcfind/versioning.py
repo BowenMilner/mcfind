@@ -178,8 +178,18 @@ def resolve_version(requested: str | None) -> EffectiveVersion:
 
 
 def require_supported_structure(min_version: str, effective: EffectiveVersion, structure_name: str, backend_name: str) -> None:
+    require_supported_feature("structure", min_version, effective, structure_name, backend_name)
+
+
+def require_supported_feature(
+    feature_kind: str,
+    min_version: str,
+    effective: EffectiveVersion,
+    feature_name: str,
+    backend_name: str,
+) -> None:
     if version_rank(effective.backend_key) < version_rank(min_version):
         raise McfindError(
-            f'structure "{structure_name}" is not supported by backend "{backend_name}" for effective version "{effective.backend_key}".',
-            hint=f"{structure_name.replace('_', ' ')} requires {min_version}+ world generation.",
+            f'{feature_kind} "{feature_name}" is not supported by backend "{backend_name}" for effective version "{effective.backend_key}".',
+            hint=f"{feature_name.replace('_', ' ')} requires {min_version}+ world generation.",
         )

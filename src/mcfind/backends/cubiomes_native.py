@@ -94,4 +94,20 @@ def load_native_library(cache_dir: str | None = None) -> CDLL:
         c_int,
     ]
     library.mcfind_query_structure.restype = c_int
+    library.mcfind_query_biome.argtypes = [
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_longlong,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        POINTER(NativeResult),
+        POINTER(c_int),
+        POINTER(c_char),
+        c_int,
+    ]
+    library.mcfind_query_biome.restype = c_int
     return library

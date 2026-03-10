@@ -122,3 +122,44 @@ class CubiomesBackend(WorldgenBackend):
             limit=limit,
             timeout=timeout,
         )
+
+    def nearest_biome(
+        self,
+        biome_id: int,
+        dimension: str,
+        sample_y: int,
+        version_enum: int,
+        seed: int,
+        from_x: int,
+        from_z: int,
+        limit: int,
+        timeout: float | None = None,
+    ) -> list[BackendResult]:
+        dimension_enum = {"overworld": 0, "nether": -1, "end": 1}[dimension]
+        results = (NativeResult * limit)()
+        count = c_int(0)
+        error = (c_char * 512)()
+        timeout_ms = int(timeout * 1000) if timeout else 0
+        ok = self._lib.mcfind_query_biome(
+            biome_id,
+            dimension_enum,
+            sample_y,
+            version_enum,
+            seed,
+            from_x,
+            from_z,
+            limit,
+            timeout_ms,
+            results,
+            byref(count),
+            error,
+            len(error),
+        )
+        if not ok:
+            message = bytes(error).split(b"\x00", 1)[0].decode() or "Unknown cubiomes error."
+            raise McfindError(message)
+        return [
+            BackendResult(x=results[index].x, z=results[index].z, exact=bool(results[index].exact))
+            for index in range(count.value)
+            if results[index].valid
+        ]

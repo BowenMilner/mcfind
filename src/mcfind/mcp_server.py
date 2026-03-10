@@ -19,6 +19,7 @@ from mcfind.errors import McfindError
 from mcfind.mcp_bridge import (
     import_save_payload,
     make_error_payload,
+    nearest_biome_payload,
     nearest_payload,
     route_payload,
     seed_info_payload,
@@ -136,7 +137,7 @@ def create_server() -> FastMCP:
         name=os.environ.get("MCFIND_MCP_NAME", "mcfind"),
         instructions=(
             "Read-only Minecraft Java worldgen tools backed by local cubiomes logic. "
-            "Use these tools for structure lookups, radius searches, route planning, "
+            "Use these tools for structure and biome lookups, radius searches, route planning, "
             "seed metadata, and Java save imports."
         ),
         host=host,
@@ -183,11 +184,41 @@ def create_server() -> FastMCP:
         dimension: str | None = None,
         chunk_version: str | None = None,
         explain: bool = False,
-    ) -> CallToolResult:
+        ) -> CallToolResult:
         return _tool_call(
             nearest_payload,
             seed=seed,
             structures=structures,
+            version=version,
+            from_x=from_x,
+            from_z=from_z,
+            top=top,
+            dimension=dimension,
+            chunk_version=chunk_version,
+            explain=explain,
+        )
+
+    @server.tool(
+        name="find_nearest_biome",
+        title="Find nearest biomes",
+        annotations=readonly,
+        description="Find the nearest Minecraft Java biome or biomes to a coordinate using local worldgen logic.",
+    )
+    def find_nearest_biome(
+        seed: int,
+        biomes: list[str],
+        version: str = "1.21.11",
+        from_x: int = 0,
+        from_z: int = 0,
+        top: int = 1,
+        dimension: str | None = None,
+        chunk_version: str | None = None,
+        explain: bool = False,
+    ) -> CallToolResult:
+        return _tool_call(
+            nearest_biome_payload,
+            seed=seed,
+            biomes=biomes,
             version=version,
             from_x=from_x,
             from_z=from_z,

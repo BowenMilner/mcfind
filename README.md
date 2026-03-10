@@ -15,6 +15,7 @@ The first cubiomes-backed query compiles a local native adapter with `cc`.
 ```bash
 mcfind nearest --seed -461418396194504394 --edition java --version 1.21.11 --from 780 874 --structure stronghold
 mcfind nearest --seed -461418396194504394 --edition java --version 1.21.11 --from 780 874 --structure trial_chamber --format json
+mcfind nearest-biome --seed -461418396194504394 --edition java --version 1.21.11 --from 780 874 --biome cherry_grove --format json
 mcfind within-radius --seed -461418396194504394 --version 1.21.11 --from 780 874 --radius 5000 --structure village
 mcfind route --seed -461418396194504394 --version 1.21.11 --from 780 874 --structure village,trial_chamber,stronghold --limit 5 --format json
 mcfind import-save ~/Games/Minecraft/saves/MyWorld --format json
@@ -29,15 +30,25 @@ Start the remote MCP server locally:
 mcfind-mcp
 ```
 
+For a one-command ChatGPT developer-mode setup, start both the MCP server and a Cloudflare quick tunnel:
+
+```bash
+mcfind-chatgpt
+```
+
+That command prints the local and public `/health` and `/mcp` URLs and keeps both child processes running until `Ctrl-C`.
+
 By default it serves Streamable HTTP on `http://127.0.0.1:8000/mcp` with:
 
 - `GET /`
+- `GET /health`
 - `GET /healthz`
 - `POST /mcp`
 
 Available MCP tools:
 
 - `find_nearest_structure`
+- `find_nearest_biome`
 - `list_structures_in_radius`
 - `optimize_structure_route`
 - `get_seed_info`

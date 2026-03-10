@@ -19,3 +19,17 @@ class WorldgenBackend(Protocol):
 
     def within_radius(self, structure: str, version_enum: int, seed: int, from_x: int, from_z: int, radius: int, limit: int, timeout: float | None = None) -> list[BackendResult]:
         ...
+
+    def nearest_biome(
+        self,
+        biome_id: int,
+        dimension: str,
+        sample_y: int,
+        version_enum: int,
+        seed: int,
+        from_x: int,
+        from_z: int,
+        limit: int,
+        timeout: float | None = None,
+    ) -> list[BackendResult]:
+        ...
