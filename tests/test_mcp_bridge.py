@@ -4,7 +4,7 @@ import unittest
 
 from starlette.testclient import TestClient
 
-from mcfind.mcp_bridge import nearest_payload
+from mcfind.mcp_bridge import nearest_biome_payload, nearest_payload
 from mcfind.mcp_server import create_http_app, create_server
 
 
@@ -14,6 +14,11 @@ class McpBridgeTests(unittest.TestCase):
         self.assertEqual(payload["command"], "nearest")
         self.assertEqual(payload["results"][0]["structure"], "stronghold")
 
+    def test_nearest_biome_payload_returns_cli_shape(self) -> None:
+        payload = nearest_biome_payload(seed=12345, biomes=["plains"], top=1)
+        self.assertEqual(payload["command"], "nearest-biome")
+        self.assertEqual(payload["results"][0]["biome"], "plains")
+
     def test_server_registers_expected_tools_and_routes(self) -> None:
         server = create_server()
         app = create_http_app(server)
@@ -22,6 +27,7 @@ class McpBridgeTests(unittest.TestCase):
             tool_names,
             [
                 "find_nearest_structure",
+                "find_nearest_biome",
                 "list_structures_in_radius",
                 "optimize_structure_route",
                 "get_seed_info",

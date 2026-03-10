@@ -98,8 +98,11 @@ def render_text(payload: dict[str, Any], fields: list[str] | None = None, quiet:
             lines.append(f"  - {structure}")
     results = payload.get("results")
     if isinstance(results, list):
+        default_name_field = "structure"
+        if results and "biome" in results[0]:
+            default_name_field = "biome"
         use_fields = fields or [
-            "structure",
+            default_name_field,
             "x",
             "z",
             "y",
@@ -112,7 +115,8 @@ def render_text(payload: dict[str, Any], fields: list[str] | None = None, quiet:
         ]
         for record in results:
             lines.append("")
-            title = record.get("structure", "result").replace("_", " ").title()
+            title = record.get("structure") or record.get("biome") or "result"
+            title = str(title).replace("_", " ").title()
             lines.append(title)
             for field in use_fields:
                 if field in record:

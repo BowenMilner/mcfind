@@ -20,6 +20,14 @@ def _structures_arg(structures: list[str] | str | None) -> str | None:
     return ",".join(structures)
 
 
+def _biomes_arg(biomes: list[str] | str | None) -> str | None:
+    if biomes is None:
+        return None
+    if isinstance(biomes, str):
+        return biomes
+    return ",".join(biomes)
+
+
 def run_cli_command(argv: list[str]) -> dict[str, Any]:
     args = parse_args(argv)
     envelope = args.handler(args)
@@ -54,6 +62,46 @@ def nearest_payload(
         str(from_z),
         "--structure",
         _structures_arg(structures) or "stronghold",
+        "--top",
+        str(top),
+    ]
+    _append_optional(argv, "--dimension", dimension)
+    _append_optional(argv, "--chunk-version", chunk_version)
+    _append_optional(argv, "--backend", backend)
+    _append_optional(argv, "--timeout", timeout)
+    if explain:
+        argv.append("--explain")
+    return run_cli_command(argv)
+
+
+def nearest_biome_payload(
+    *,
+    seed: int,
+    version: str = "1.21.11",
+    from_x: int = 0,
+    from_z: int = 0,
+    biomes: list[str] | str = "cherry_grove",
+    edition: str = "java",
+    top: int = 1,
+    dimension: str | None = None,
+    explain: bool = False,
+    chunk_version: str | None = None,
+    backend: str = "cubiomes",
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    argv = [
+        "nearest-biome",
+        "--seed",
+        str(seed),
+        "--edition",
+        edition,
+        "--version",
+        version,
+        "--from",
+        str(from_x),
+        str(from_z),
+        "--biome",
+        _biomes_arg(biomes) or "cherry_grove",
         "--top",
         str(top),
     ]

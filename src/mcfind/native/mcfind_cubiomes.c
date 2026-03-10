@@ -307,6 +307,161 @@ static int query_strongholds(
 }
 
 
+static int scan_biome_ring(
+    const Generator *g,
+    int biome_id,
+    int sample_y,
+    int from_x,
+    int from_z,
+    int ring,
+    mcfind_result_t *results,
+    int *count,
+    int capacity,
+    long long deadline
+)
+{
+    int x, z;
+    int x1 = from_x - (ring * 4);
+    int x2 = from_x + (ring * 4);
+    int z1 = from_z - (ring * 4);
+    int z2 = from_z + (ring * 4);
+
+    if (ring == 0)
+    {
+        Range single = {4, floor_div(from_x, 4), floor_div(from_z, 4), 1, 1, sample_y, 1};
+        int *ids = allocCache(g, single);
+        int ok = genBiomes(g, ids, single);
+        if (ok == 0 && ids[0] == biome_id)
+            insert_result(results, count, capacity, from_x, from_z, from_x, from_z, 1);
+        free(ids);
+        return ok == 0 ? 1 : 0;
+    }
+
+    {
+        int width = ((x2 - x1) >> 2) + 1;
+        Range top = {4, floor_div(x1, 4), floor_div(z1, 4), width, 1, sample_y, 1};
+        Range bottom = {4, floor_div(x1, 4), floor_div(z2, 4), width, 1, sample_y, 1};
+        int *ids = allocCache(g, top);
+        if (genBiomes(g, ids, top) != 0)
+        {
+            free(ids);
+            return 0;
+        }
+        for (x = 0; x < width; x++)
+        {
+            if (ids[x] == biome_id)
+                insert_result(results, count, capacity, from_x, from_z, x1 + x*4, z1, 1);
+        }
+        free(ids);
+
+        ids = allocCache(g, bottom);
+        if (genBiomes(g, ids, bottom) != 0)
+        {
+            free(ids);
+            return 0;
+        }
+        for (x = 0; x < width; x++)
+        {
+            if (ids[x] == biome_id)
+                insert_result(results, count, capacity, from_x, from_z, x1 + x*4, z2, 1);
+        }
+        free(ids);
+    }
+
+    if (z2 - z1 > 4)
+    {
+        int height = ((z2 - z1) >> 2) - 1;
+        Range left = {4, floor_div(x1, 4), floor_div(z1, 4) + 1, 1, height, sample_y, 1};
+        Range right = {4, floor_div(x2, 4), floor_div(z1, 4) + 1, 1, height, sample_y, 1};
+        int *ids = allocCache(g, left);
+        if (genBiomes(g, ids, left) != 0)
+        {
+            free(ids);
+            return 0;
+        }
+        for (z = 0; z < height; z++)
+        {
+            if (ids[z] == biome_id)
+                insert_result(results, count, capacity, from_x, from_z, x1, z1 + (z+1)*4, 1);
+        }
+        free(ids);
+
+        ids = allocCache(g, right);
+        if (genBiomes(g, ids, right) != 0)
+        {
+            free(ids);
+            return 0;
+        }
+        for (z = 0; z < height; z++)
+        {
+            if (ids[z] == biome_id)
+                insert_result(results, count, capacity, from_x, from_z, x2, z1 + (z+1)*4, 1);
+        }
+        free(ids);
+    }
+
+    if (deadline > 0 && now_ms() > deadline)
+        return 2;
+    return 1;
+}
+
+
+static int query_biome(
+    int biome_id,
+    int dimension,
+    int sample_y,
+    int mc,
+    long long seed,
+    int from_x,
+    int from_z,
+    int limit,
+    int timeout_ms,
+    mcfind_result_t *results,
+    int *count,
+    char *error,
+    int error_len
+)
+{
+    Generator g;
+    int ring = 0;
+    int max_ring = 65536 / 4;
+    long long deadline = timeout_ms > 0 ? now_ms() + timeout_ms : 0;
+
+    setupGenerator(&g, mc, 0);
+    applySeed(&g, dimension, (uint64_t) seed);
+
+    for (ring = 0; ring <= max_ring; ring++)
+    {
+        int status;
+        double farthest;
+        if (deadline > 0 && now_ms() > deadline)
+        {
+            set_error(error, error_len, "Timed out while locating biome.");
+            return 0;
+        }
+        status = scan_biome_ring(&g, biome_id, sample_y, from_x, from_z, ring, results, count, limit, deadline);
+        if (status == 2)
+        {
+            set_error(error, error_len, "Timed out while locating biome.");
+            return 0;
+        }
+        if (status == 0)
+        {
+            set_error(error, error_len, "Failed while sampling biome grid.");
+            return 0;
+        }
+        if (*count >= limit)
+        {
+            farthest = block_distance(from_x, from_z, results[*count - 1].x, results[*count - 1].z);
+            if ((double) (ring * 4) > farthest)
+                return 1;
+        }
+    }
+
+    return 1;
+}
+
+
 int mcfind_query_structure(
     int structure_type,
     int mc,
@@ -339,4 +494,38 @@ int mcfind_query_structure(
     if (structure_type == MCFIND_STRONGHOLD)
         return query_strongholds(mc, seed, from_x, from_z, radius_blocks, limit, timeout_ms, results, count, error, error_len);
     return query_regular_structure(structure_type, mc, seed, from_x, from_z, radius_blocks, limit, timeout_ms, results, count, error, error_len);
+}
+
+
+int mcfind_query_biome(
+    int biome_id,
+    int dimension,
+    int sample_y,
+    int mc,
+    long long seed,
+    int from_x,
+    int from_z,
+    int limit,
+    int timeout_ms,
+    mcfind_result_t *results,
+    int *count,
+    char *error,
+    int error_len
+)
+{
+    int i;
+    if (!results || !count || limit <= 0)
+    {
+        set_error(error, error_len, "Invalid result buffer.");
+        return 0;
+    }
+    *count = 0;
+    for (i = 0; i < limit; i++)
+    {
+        results[i].x = 0;
+        results[i].z = 0;
+        results[i].valid = 0;
+        results[i].exact = 0;
+    }
+    return query_biome(biome_id, dimension, sample_y, mc, seed, from_x, from_z, limit, timeout_ms, results, count, error, error_len);
 }

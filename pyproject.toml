@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 mcfind = "mcfind.cli:main"
+mcfind-chatgpt = "mcfind.chatgpt:main"
 mcfind-mcp = "mcfind.mcp_server:main"
 
 [tool.setuptools]
