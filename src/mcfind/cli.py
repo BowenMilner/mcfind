@@ -2,19 +2,33 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Any
 
-from mcfind.backends.cubiomes import CubiomesBackend
-from mcfind.biomes import BIOMES, get_biome, parse_biomes
-from mcfind.coords import bearing, chunk_coords, distance_blocks, nether_equivalent, parse_coordinate_pair, region_coords
-from mcfind.errors import EmptyResultError, McfindError
-from mcfind.models import ResponseEnvelope, ResultRecord
+from mcfind.coords import parse_coordinate_pair
+from mcfind.errors import McfindError
+from mcfind.models import ResponseEnvelope
 from mcfind.output import render_payload
-from mcfind.profiles import add_profile, get_profile, load_profiles, remove_profile
-from mcfind.region_versions import add_region_version, load_region_versions, remove_region_version, resolve_region_version
-from mcfind.save_import import import_java_save
-from mcfind.structures import STRUCTURES, get_structure, parse_structures
-from mcfind.versioning import EffectiveVersion, require_supported_feature, require_supported_structure, resolve_version
+from mcfind.services import (
+    BiomeQueryRequest,
+    ProfileAddRequest,
+    RadiusQueryRequest,
+    RegionVersionAddRequest,
+    RouteQueryRequest,
+    SeedInfoRequest,
+    StructureQueryRequest,
+    import_save_response,
+    nearest_biome_response,
+    nearest_response,
+    parse_seed,
+    profile_add_response,
+    profile_list_response,
+    profile_remove_response,
+    region_add_response,
+    region_list_response,
+    region_remove_response,
+    route_response,
+    seed_info_response,
+    within_radius_response,
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -112,13 +126,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return namespace
 
 
-def parse_seed(value: str | None) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise McfindError("invalid seed", hint="Seeds must be signed 64-bit integers.") from exc
+def _origin_from_args(args: argparse.Namespace) -> tuple[tuple[int, int] | None, bool]:
+    raw = getattr(args, "from_coords", None)
+    if raw:
+        if len(raw) == 1 and str(raw[0]).lower() == "spawn":
+            return None, True
+        return parse_coordinate_pair(raw), False
+    if getattr(args, "from_x", None) is not None and getattr(args, "from_z", None) is not None:
+        return (int(args.from_x), int(args.from_z)), False
+    return None, False
+
+
+def _common_query_kwargs(args: argparse.Namespace) -> dict[str, object]:
+    origin, use_spawn = _origin_from_args(args)
+    return {
+        "seed": parse_seed(getattr(args, "seed", None)),
+        "edition": getattr(args, "edition", "java"),
+        "version": getattr(args, "version", None),
+        "chunk_version": getattr(args, "chunk_version", None),
+        "profile": getattr(args, "profile", None),
+        "save": getattr(args, "save", None),
+        "origin": origin,
+        "use_spawn": use_spawn,
+        "dimension": getattr(args, "dimension", None),
+        "backend": getattr(args, "backend", "auto"),
+        "cache_dir": getattr(args, "cache_dir", None),
+        "timeout": getattr(args, "timeout", None),
+        "explain": getattr(args, "explain", False),
+    }
 
 
 def selected_fields(args: argparse.Namespace) -> list[str] | None:
@@ -127,538 +162,94 @@ def selected_fields(args: argparse.Namespace) -> list[str] | None:
     return [field.strip() for field in args.fields.split(",") if field.strip()]
 
 
-def resolve_query_inputs(args: argparse.Namespace) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    profile = get_profile(args.profile) if getattr(args, "profile", None) else None
-    save = import_java_save(args.save) if getattr(args, "save", None) else None
-    return profile, save
-
-
-def resolve_seed(args: argparse.Namespace, profile: dict[str, Any] | None, save: dict[str, Any] | None) -> int:
-    seed = parse_seed(getattr(args, "seed", None))
-    if seed is not None:
-        return seed
-    if profile and profile.get("seed") is not None:
-        return int(profile["seed"])
-    if save and save.get("seed") is not None:
-        return int(save["seed"])
-    raise McfindError("invalid seed", hint="Provide --seed, --profile, or --save.")
-
-
-def resolve_origin(args: argparse.Namespace, profile: dict[str, Any] | None, save: dict[str, Any] | None) -> tuple[int, int]:
-    raw = getattr(args, "from_coords", None)
-    if raw:
-        if len(raw) == 1 and str(raw[0]).lower() == "spawn":
-            if not save:
-                raise McfindError('Cannot use `--from spawn` without `--save`.')
-            spawn = save["spawn"]
-            return int(spawn["x"]), int(spawn["z"])
-        return parse_coordinate_pair(raw)
-    if getattr(args, "from_x", None) is not None and getattr(args, "from_z", None) is not None:
-        return int(args.from_x), int(args.from_z)
-    if profile and profile.get("base"):
-        return int(profile["base"][0]), int(profile["base"][1])
-    if save and getattr(args, "command", None) != "seed-info":
-        spawn = save.get("spawn") or {}
-        return int(spawn.get("x", 0)), int(spawn.get("z", 0))
-    raise McfindError("invalid coordinate pair", hint="Provide --from, --from-x/--from-z, a profile base, or a save.")
-
-
-def resolve_effective_version(
-    args: argparse.Namespace,
-    origin: tuple[int, int] | None,
-    profile: dict[str, Any] | None,
-    save: dict[str, Any] | None,
-    warnings: list[str],
-) -> EffectiveVersion:
-    requested = getattr(args, "chunk_version", None) or getattr(args, "version", None)
-    if not requested and profile:
-        requested = profile.get("version")
-    if not requested and save:
-        requested = save.get("version_name")
-    if not requested and origin:
-        region_match = resolve_region_version(origin[0], origin[1])
-        if region_match:
-            requested = region_match["version"]
-            warnings.append(
-                f'Using region-version mapping {region_match["version"]} for origin chunk at ({origin[0]}, {origin[1]}).'
-            )
-    effective = resolve_version(requested)
-    warnings.extend(effective.warnings)
-    return effective
-
-
-def resolve_dimension(structure_names: list[str], explicit_dimension: str | None) -> str:
-    dimensions = {get_structure(name).dimension for name in structure_names}
-    if len(dimensions) > 1:
-        raise McfindError("Mixed-dimension structure queries are not supported.", hint="Query one dimension at a time.")
-    inferred = next(iter(dimensions))
-    if explicit_dimension is None:
-        return inferred
-    if "ruined_portal" in structure_names and explicit_dimension in {"overworld", "nether"}:
-        return explicit_dimension
-    if explicit_dimension != inferred:
-        raise McfindError(
-            f'Invalid dimension "{explicit_dimension}" for requested structure set.',
-            hint=f"These structures generate in {inferred}.",
-        )
-    return explicit_dimension
-
-
-def resolve_biome_dimension(biome_names: list[str], explicit_dimension: str | None) -> str:
-    dimensions = {get_biome(name).dimension for name in biome_names}
-    if len(dimensions) > 1:
-        raise McfindError("Mixed-dimension biome queries are not supported.", hint="Query one dimension at a time.")
-    inferred = next(iter(dimensions))
-    if explicit_dimension is None:
-        return inferred
-    if explicit_dimension != inferred:
-        raise McfindError(
-            f'Invalid dimension "{explicit_dimension}" for requested biome set.',
-            hint=f"These biomes generate in {inferred}.",
-        )
-    return explicit_dimension
-
-
-def resolve_backend_name(structure: str, dimension: str) -> str:
-    definition = get_structure(structure)
-    if structure == "ruined_portal" and dimension == "nether":
-        return "ruined_portal_nether"
-    return definition.backend_name
-
-
-def make_backend(args: argparse.Namespace) -> CubiomesBackend:
-    if args.backend not in {"auto", "cubiomes"}:
-        raise McfindError(f'backend "{args.backend}" is not available.')
-    return CubiomesBackend(cache_dir=args.cache_dir)
-
-
-def hydrate_result(structure_name: str, dimension: str, from_x: int, from_z: int, x: int, z: int) -> ResultRecord:
-    chunk_x, chunk_z = chunk_coords(x, z)
-    region_x, region_z = region_coords(x, z)
-    nether_x, nether_z = nether_equivalent(x, z, dimension)
-    definition = get_structure(structure_name)
-    notes = []
-    if definition.exactness_note:
-        notes.append(definition.exactness_note)
-    return ResultRecord(
-        structure=structure_name,
-        x=x,
-        z=z,
-        y=None,
-        distance_blocks=round(distance_blocks(from_x, from_z, x, z), 1),
-        bearing=bearing(from_x, from_z, x, z),
-        notes=notes,
-        dimension=dimension,
-        chunk_x=chunk_x,
-        chunk_z=chunk_z,
-        region_x=region_x,
-        region_z=region_z,
-        nether_equivalent_x=nether_x,
-        nether_equivalent_z=nether_z,
-    )
-
-
-def hydrate_biome_result(biome_name: str, dimension: str, from_x: int, from_z: int, x: int, z: int) -> dict[str, Any]:
-    chunk_x, chunk_z = chunk_coords(x, z)
-    region_x, region_z = region_coords(x, z)
-    nether_x, nether_z = nether_equivalent(x, z, dimension)
-    definition = get_biome(biome_name)
-    notes = []
-    if definition.exactness_note:
-        notes.append(definition.exactness_note)
-    notes.append("Biome positions are sampled on cubiomes' 1:4 biome grid, so edges can shift by a few blocks.")
-    return {
-        "biome": biome_name,
-        "x": x,
-        "z": z,
-        "y": None,
-        "distance_blocks": round(distance_blocks(from_x, from_z, x, z), 1),
-        "bearing": bearing(from_x, from_z, x, z),
-        "notes": notes,
-        "dimension": dimension,
-        "chunk_x": chunk_x,
-        "chunk_z": chunk_z,
-        "region_x": region_x,
-        "region_z": region_z,
-        "nether_equivalent_x": nether_x,
-        "nether_equivalent_z": nether_z,
-    }
-
-
-def sort_results(records: list[ResultRecord], sort_key: str) -> list[ResultRecord]:
-    key_funcs = {
-        "distance": lambda item: (item.distance_blocks, item.structure, item.x, item.z),
-        "x": lambda item: (item.x, item.z, item.structure),
-        "z": lambda item: (item.z, item.x, item.structure),
-        "structure": lambda item: (item.structure, item.distance_blocks, item.x, item.z),
-    }
-    return sorted(records, key=key_funcs[sort_key])
-
-
-def sort_payload_results(records: list[dict[str, Any]], sort_key: str) -> list[dict[str, Any]]:
-    key_name = "structure" if records and "structure" in records[0] else "biome"
-    key_funcs = {
-        "distance": lambda item: (item["distance_blocks"], item.get(key_name), item["x"], item["z"]),
-        "x": lambda item: (item["x"], item["z"], item.get(key_name)),
-        "z": lambda item: (item["z"], item["x"], item.get(key_name)),
-        "structure": lambda item: (item.get(key_name), item["distance_blocks"], item["x"], item["z"]),
-    }
-    return sorted(records, key=key_funcs[sort_key])
-
-
-def build_query_context(args: argparse.Namespace) -> tuple[CubiomesBackend, list[str], dict[str, Any] | None, dict[str, Any] | None, int, tuple[int, int], EffectiveVersion, str, list[str]]:
-    if args.edition != "java":
-        raise McfindError('Only `--edition java` is supported in this build.')
-    structures = parse_structures(args.structures)
-    warnings: list[str] = []
-    profile, save = resolve_query_inputs(args)
-    origin = resolve_origin(args, profile, save)
-    effective = resolve_effective_version(args, origin, profile, save, warnings)
-    dimension = resolve_dimension(structures, args.dimension)
-    backend = make_backend(args)
-    seed = resolve_seed(args, profile, save)
-    if args.command in {"within-radius", "route"} and resolve_region_version(origin[0], origin[1]) and not args.chunk_version:
-        warnings.append("Mixed-version support currently resolves by origin chunk. Queries spanning multiple generation regions should use --chunk-version explicitly.")
-    return backend, structures, profile, save, seed, origin, effective, dimension, warnings
-
-
-def explain_payload(effective: EffectiveVersion, backend_name: str, structures: list[str]) -> dict[str, Any]:
-    return {
-        "version": effective.explanation,
-        "backend": f"{backend_name} computes structure placement locally from cubiomes logic.",
-        "results": [get_structure(name).exactness_note for name in structures if get_structure(name).exactness_note],
-    }
-
-
-def biome_explain_payload(effective: EffectiveVersion, backend_name: str, biomes: list[str]) -> dict[str, Any]:
-    return {
-        "version": effective.explanation,
-        "backend": f"{backend_name} samples biome placement locally from cubiomes logic.",
-        "results": [
-            "Biome searches use cubiomes' 1:4 biome grid and return X/Z only. Underground or vertical biome boundaries are not modeled in this command."
-        ]
-        + [get_biome(name).exactness_note for name in biomes if get_biome(name).exactness_note],
-    }
-
-
 def handle_nearest(args: argparse.Namespace) -> ResponseEnvelope:
-    backend, structures, _profile, _save, seed, origin, effective, dimension, warnings = build_query_context(args)
-    limit = args.top or args.limit or 1
-    records: list[ResultRecord] = []
-    for structure_name in structures:
-        definition = get_structure(structure_name)
-        require_supported_structure(definition.min_version, effective, structure_name, backend.name)
-        backend_name = resolve_backend_name(structure_name, dimension)
-        results = backend.nearest(
-            backend_name,
-            effective.cubiomes_mc,
-            seed,
-            origin[0],
-            origin[1],
-            limit,
-            timeout=args.timeout,
+    return nearest_response(
+        StructureQueryRequest(
+            **_common_query_kwargs(args),
+            structures=args.structures,
+            top=args.top,
+            limit=args.limit,
+            sort=args.sort,
+            exit_on_empty=args.exit_on_empty,
         )
-        records.extend(
-            hydrate_result(structure_name, dimension, origin[0], origin[1], result.x, result.z)
-            for result in results
-        )
-    if not records and args.exit_on_empty:
-        raise EmptyResultError(hint="Try increasing --top or checking the version/dimension.")
-    records = sort_results(records, args.sort)
-    return ResponseEnvelope(
-        seed=seed,
-        edition=args.edition,
-        version_requested=effective.requested,
-        version_effective=effective.effective,
-        source_backend=backend.name,
-        command="nearest",
-        warnings=warnings,
-        results=[record.to_dict() for record in records],
-        explain=explain_payload(effective, backend.name, structures) if args.explain else None,
     )
 
 
 def handle_nearest_biome(args: argparse.Namespace) -> ResponseEnvelope:
-    if args.edition != "java":
-        raise McfindError('Only `--edition java` is supported in this build.')
-    if not args.biomes:
-        raise McfindError("At least one biome must be provided.", hint="Use --biome cherry_grove or --biomes cherry_grove,mushroom_fields.")
-    warnings: list[str] = []
-    profile, save = resolve_query_inputs(args)
-    origin = resolve_origin(args, profile, save)
-    effective = resolve_effective_version(args, origin, profile, save, warnings)
-    biome_names = parse_biomes(args.biomes)
-    dimension = resolve_biome_dimension(biome_names, args.dimension)
-    backend = make_backend(args)
-    seed = resolve_seed(args, profile, save)
-    limit = args.top or args.limit or 1
-    records: list[dict[str, Any]] = []
-    for biome_name in biome_names:
-        definition = get_biome(biome_name)
-        require_supported_feature("biome", definition.min_version, effective, biome_name, backend.name)
-        results = backend.nearest_biome(
-            definition.biome_id,
-            definition.dimension,
-            definition.sample_y,
-            effective.cubiomes_mc,
-            seed,
-            origin[0],
-            origin[1],
-            limit,
-            timeout=args.timeout,
+    return nearest_biome_response(
+        BiomeQueryRequest(
+            **_common_query_kwargs(args),
+            biomes=args.biomes,
+            top=args.top,
+            limit=args.limit,
+            sort=args.sort,
+            exit_on_empty=args.exit_on_empty,
         )
-        records.extend(
-            hydrate_biome_result(biome_name, dimension, origin[0], origin[1], result.x, result.z)
-            for result in results
-        )
-    if not records and args.exit_on_empty:
-        raise EmptyResultError(hint="Try increasing --timeout or confirming the selected version/dimension.")
-    records = sort_payload_results(records, args.sort)
-    return ResponseEnvelope(
-        seed=seed,
-        edition=args.edition,
-        version_requested=effective.requested,
-        version_effective=effective.effective,
-        source_backend=backend.name,
-        command="nearest-biome",
-        warnings=warnings,
-        results=records,
-        explain=biome_explain_payload(effective, backend.name, biome_names) if args.explain else None,
     )
 
 
 def handle_within_radius(args: argparse.Namespace) -> ResponseEnvelope:
-    backend, structures, _profile, _save, seed, origin, effective, dimension, warnings = build_query_context(args)
-    limit = args.limit
-    records: list[ResultRecord] = []
-    for structure_name in structures:
-        definition = get_structure(structure_name)
-        require_supported_structure(definition.min_version, effective, structure_name, backend.name)
-        backend_name = resolve_backend_name(structure_name, dimension)
-        results = backend.within_radius(
-            backend_name,
-            effective.cubiomes_mc,
-            seed,
-            origin[0],
-            origin[1],
-            args.radius,
-            limit,
-            timeout=args.timeout,
+    return within_radius_response(
+        RadiusQueryRequest(
+            **_common_query_kwargs(args),
+            structures=args.structures,
+            radius=args.radius,
+            limit=args.limit,
+            sort=args.sort,
+            exit_on_empty=args.exit_on_empty,
         )
-        records.extend(
-            hydrate_result(structure_name, dimension, origin[0], origin[1], result.x, result.z)
-            for result in results
-        )
-    if not records and args.exit_on_empty:
-        raise EmptyResultError(hint="Try increasing --radius or confirming the selected version.")
-    records = sort_results(records, args.sort)
-    return ResponseEnvelope(
-        seed=seed,
-        edition=args.edition,
-        version_requested=effective.requested,
-        version_effective=effective.effective,
-        source_backend=backend.name,
-        command="within-radius",
-        warnings=warnings,
-        results=[record.to_dict() for record in records],
-        explain=explain_payload(effective, backend.name, structures) if args.explain else None,
     )
 
 
 def handle_route(args: argparse.Namespace) -> ResponseEnvelope:
-    backend, structures, _profile, _save, seed, origin, effective, dimension, warnings = build_query_context(args)
-    per_structure_limit = args.limit
-    candidates: dict[str, list[ResultRecord]] = {}
-    for structure_name in structures:
-        definition = get_structure(structure_name)
-        require_supported_structure(definition.min_version, effective, structure_name, backend.name)
-        backend_name = resolve_backend_name(structure_name, dimension)
-        results = backend.within_radius(
-            backend_name,
-            effective.cubiomes_mc,
-            seed,
-            origin[0],
-            origin[1],
-            args.radius,
-            per_structure_limit,
-            timeout=args.timeout,
+    return route_response(
+        RouteQueryRequest(
+            **_common_query_kwargs(args),
+            structures=args.structures,
+            radius=args.radius,
+            limit=args.limit,
+            exit_on_empty=args.exit_on_empty,
         )
-        candidates[structure_name] = [
-            hydrate_result(structure_name, dimension, origin[0], origin[1], result.x, result.z)
-            for result in results
-        ]
-    current = origin
-    remaining = set(structures)
-    ordered: list[ResultRecord] = []
-    total = 0.0
-    while remaining:
-        best: tuple[str, ResultRecord, float] | None = None
-        for structure_name in list(remaining):
-            for candidate in candidates.get(structure_name, []):
-                step_distance = distance_blocks(current[0], current[1], candidate.x, candidate.z)
-                if best is None or step_distance < best[2]:
-                    best = (structure_name, candidate, step_distance)
-        if best is None:
-            break
-        remaining.remove(best[0])
-        ordered.append(best[1])
-        total += best[2]
-        current = (best[1].x, best[1].z)
-    if not ordered and args.exit_on_empty:
-        raise EmptyResultError(hint="Try increasing --radius or --limit.")
-    return ResponseEnvelope(
-        seed=seed,
-        edition=args.edition,
-        version_requested=effective.requested,
-        version_effective=effective.effective,
-        source_backend=backend.name,
-        command="route",
-        warnings=warnings,
-        results=[record.to_dict() for record in ordered],
-        route={"algorithm": "greedy", "total_distance_blocks": round(total, 1)},
-        explain=explain_payload(effective, backend.name, structures) if args.explain else None,
     )
 
 
 def handle_seed_info(args: argparse.Namespace) -> ResponseEnvelope:
-    if args.edition != "java":
-        raise McfindError('Only `--edition java` is supported in this build.')
-    profile, save = resolve_query_inputs(args)
-    warnings: list[str] = []
-    seed = resolve_seed(args, profile, save)
-    origin = (0, 0)
-    if args.from_coords or (args.from_x is not None and args.from_z is not None) or profile or save:
-        try:
-            origin = resolve_origin(args, profile, save)
-        except McfindError:
-            origin = (0, 0)
-    effective = resolve_effective_version(args, origin, profile, save, warnings)
-    structures = parse_structures(args.structures) if args.structures else sorted(STRUCTURES.keys())
-    dimension = resolve_dimension(structures, args.dimension) if args.structures else "overworld"
-    backend = make_backend(args)
-    supported = []
-    for structure_name in structures:
-        definition = get_structure(structure_name)
-        require_supported_structure(definition.min_version, effective, structure_name, backend.name)
-        supported.append(structure_name)
-    return ResponseEnvelope(
-        seed=seed,
-        edition=args.edition,
-        version_requested=effective.requested,
-        version_effective=effective.effective,
-        source_backend=backend.name,
-        command="seed-info",
-        warnings=warnings,
-        info={
-            "origin": {"x": origin[0], "z": origin[1]},
-            "dimension": dimension,
-            "supported_structures": supported,
-        },
-        explain=explain_payload(effective, backend.name, structures) if args.explain else None,
-    )
+    return seed_info_response(SeedInfoRequest(**_common_query_kwargs(args), structures=args.structures))
 
 
 def handle_import_save(args: argparse.Namespace) -> ResponseEnvelope:
-    save = import_java_save(args.path)
-    return ResponseEnvelope(
-        seed=save.get("seed"),
-        edition="java",
-        version_requested=save.get("version_name"),
-        version_effective=resolve_version(save.get("version_name")).effective if save.get("version_name") else None,
-        source_backend="local-save",
-        command="import-save",
-        warnings=[],
-        save=save,
-    )
+    return import_save_response(args.path)
 
 
 def handle_profile_add(args: argparse.Namespace) -> ResponseEnvelope:
-    payload = {
-        "name": args.name,
-        "seed": parse_seed(args.seed),
-        "version": args.version,
-        "base": [int(args.base[0]), int(args.base[1])],
-    }
-    add_profile(args.name, payload)
-    return ResponseEnvelope(
-        seed=payload["seed"],
-        edition="java",
-        version_requested=payload["version"],
-        version_effective=resolve_version(payload["version"]).effective,
-        source_backend="local-profile",
-        command="profile-add",
-        warnings=[],
-        profiles=[payload],
+    return profile_add_response(
+        ProfileAddRequest(
+            name=args.name,
+            seed=args.seed,
+            version=args.version,
+            base=(int(args.base[0]), int(args.base[1])),
+        )
     )
 
 
-def handle_profile_list(args: argparse.Namespace) -> ResponseEnvelope:
-    profiles = [{"name": name, **payload} for name, payload in sorted(load_profiles().items())]
-    return ResponseEnvelope(
-        seed=None,
-        edition="java",
-        version_requested=None,
-        version_effective=None,
-        source_backend="local-profile",
-        command="profile-list",
-        warnings=[],
-        profiles=profiles,
-    )
+def handle_profile_list(_args: argparse.Namespace) -> ResponseEnvelope:
+    return profile_list_response()
 
 
 def handle_profile_remove(args: argparse.Namespace) -> ResponseEnvelope:
-    remove_profile(args.name)
-    return ResponseEnvelope(
-        seed=None,
-        edition="java",
-        version_requested=None,
-        version_effective=None,
-        source_backend="local-profile",
-        command="profile-remove",
-        warnings=[],
-        profiles=[{"name": args.name}],
-    )
+    return profile_remove_response(args.name)
 
 
 def handle_region_add(args: argparse.Namespace) -> ResponseEnvelope:
-    record = add_region_version(tuple(args.rect), args.version)
-    return ResponseEnvelope(
-        seed=None,
-        edition="java",
-        version_requested=args.version,
-        version_effective=resolve_version(args.version).effective,
-        source_backend="local-region-map",
-        command="region-version-add",
-        warnings=[],
-        region_versions=[record],
-    )
+    return region_add_response(RegionVersionAddRequest(rect=tuple(args.rect), version=args.version))
 
 
-def handle_region_list(args: argparse.Namespace) -> ResponseEnvelope:
-    return ResponseEnvelope(
-        seed=None,
-        edition="java",
-        version_requested=None,
-        version_effective=None,
-        source_backend="local-region-map",
-        command="region-version-list",
-        warnings=[],
-        region_versions=load_region_versions(),
-    )
+def handle_region_list(_args: argparse.Namespace) -> ResponseEnvelope:
+    return region_list_response()
 
 
 def handle_region_remove(args: argparse.Namespace) -> ResponseEnvelope:
-    remove_region_version(args.index - 1)
-    return ResponseEnvelope(
-        seed=None,
-        edition="java",
-        version_requested=None,
-        version_effective=None,
-        source_backend="local-region-map",
-        command="region-version-remove",
-        warnings=[],
-        region_versions=load_region_versions(),
-    )
+    return region_remove_response(args.index)
 
 
 def emit_response(envelope: ResponseEnvelope, args: argparse.Namespace) -> int:

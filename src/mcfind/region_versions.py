@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from mcfind.errors import McfindError
-from mcfind.runtime import config_home, ensure_dir
+from mcfind.runtime import config_home, ensure_dir, write_text_atomic
 
 
 def _path() -> Path:
@@ -20,7 +20,7 @@ def load_region_versions() -> list[dict[str, Any]]:
 
 
 def save_region_versions(entries: list[dict[str, Any]]) -> None:
-    _path().write_text(json.dumps(entries, indent=2, sort_keys=True))
+    write_text_atomic(_path(), json.dumps(entries, indent=2, sort_keys=True))
 
 
 def add_region_version(rect: tuple[int, int, int, int], version: str) -> dict[str, Any]:

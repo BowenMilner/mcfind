@@ -2,36 +2,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcfind.cli import parse_args
 from mcfind.errors import McfindError
-
-
-def _append_optional(argv: list[str], flag: str, value: str | int | float | None) -> None:
-    if value is None:
-        return
-    argv.extend([flag, str(value)])
-
-
-def _structures_arg(structures: list[str] | str | None) -> str | None:
-    if structures is None:
-        return None
-    if isinstance(structures, str):
-        return structures
-    return ",".join(structures)
-
-
-def _biomes_arg(biomes: list[str] | str | None) -> str | None:
-    if biomes is None:
-        return None
-    if isinstance(biomes, str):
-        return biomes
-    return ",".join(biomes)
-
-
-def run_cli_command(argv: list[str]) -> dict[str, Any]:
-    args = parse_args(argv)
-    envelope = args.handler(args)
-    return envelope.to_dict()
+from mcfind.services import (
+    BiomeQueryRequest,
+    RadiusQueryRequest,
+    RouteQueryRequest,
+    SeedInfoRequest,
+    StructureQueryRequest,
+    import_save_response,
+    nearest_biome_response,
+    nearest_response,
+    route_response,
+    seed_info_response,
+    within_radius_response,
+)
 
 
 def nearest_payload(
@@ -49,29 +33,21 @@ def nearest_payload(
     backend: str = "cubiomes",
     timeout: float | None = None,
 ) -> dict[str, Any]:
-    argv = [
-        "nearest",
-        "--seed",
-        str(seed),
-        "--edition",
-        edition,
-        "--version",
-        version,
-        "--from",
-        str(from_x),
-        str(from_z),
-        "--structure",
-        _structures_arg(structures) or "stronghold",
-        "--top",
-        str(top),
-    ]
-    _append_optional(argv, "--dimension", dimension)
-    _append_optional(argv, "--chunk-version", chunk_version)
-    _append_optional(argv, "--backend", backend)
-    _append_optional(argv, "--timeout", timeout)
-    if explain:
-        argv.append("--explain")
-    return run_cli_command(argv)
+    return nearest_response(
+        StructureQueryRequest(
+            seed=seed,
+            edition=edition,
+            version=version,
+            chunk_version=chunk_version,
+            origin=(from_x, from_z),
+            structures=structures,
+            top=top,
+            dimension=dimension,
+            backend=backend,
+            timeout=timeout,
+            explain=explain,
+        )
+    ).to_dict()
 
 
 def nearest_biome_payload(
@@ -89,29 +65,21 @@ def nearest_biome_payload(
     backend: str = "cubiomes",
     timeout: float | None = None,
 ) -> dict[str, Any]:
-    argv = [
-        "nearest-biome",
-        "--seed",
-        str(seed),
-        "--edition",
-        edition,
-        "--version",
-        version,
-        "--from",
-        str(from_x),
-        str(from_z),
-        "--biome",
-        _biomes_arg(biomes) or "cherry_grove",
-        "--top",
-        str(top),
-    ]
-    _append_optional(argv, "--dimension", dimension)
-    _append_optional(argv, "--chunk-version", chunk_version)
-    _append_optional(argv, "--backend", backend)
-    _append_optional(argv, "--timeout", timeout)
-    if explain:
-        argv.append("--explain")
-    return run_cli_command(argv)
+    return nearest_biome_response(
+        BiomeQueryRequest(
+            seed=seed,
+            edition=edition,
+            version=version,
+            chunk_version=chunk_version,
+            origin=(from_x, from_z),
+            biomes=biomes,
+            top=top,
+            dimension=dimension,
+            backend=backend,
+            timeout=timeout,
+            explain=explain,
+        )
+    ).to_dict()
 
 
 def within_radius_payload(
@@ -131,33 +99,23 @@ def within_radius_payload(
     backend: str = "cubiomes",
     timeout: float | None = None,
 ) -> dict[str, Any]:
-    argv = [
-        "within-radius",
-        "--seed",
-        str(seed),
-        "--edition",
-        edition,
-        "--version",
-        version,
-        "--from",
-        str(from_x),
-        str(from_z),
-        "--radius",
-        str(radius),
-        "--structure",
-        _structures_arg(structures) or "village",
-        "--limit",
-        str(limit),
-        "--sort",
-        sort,
-    ]
-    _append_optional(argv, "--dimension", dimension)
-    _append_optional(argv, "--chunk-version", chunk_version)
-    _append_optional(argv, "--backend", backend)
-    _append_optional(argv, "--timeout", timeout)
-    if explain:
-        argv.append("--explain")
-    return run_cli_command(argv)
+    return within_radius_response(
+        RadiusQueryRequest(
+            seed=seed,
+            edition=edition,
+            version=version,
+            chunk_version=chunk_version,
+            origin=(from_x, from_z),
+            radius=radius,
+            structures=structures,
+            limit=limit,
+            sort=sort,
+            dimension=dimension,
+            backend=backend,
+            timeout=timeout,
+            explain=explain,
+        )
+    ).to_dict()
 
 
 def route_payload(
@@ -175,30 +133,21 @@ def route_payload(
     backend: str = "cubiomes",
     timeout: float | None = None,
 ) -> dict[str, Any]:
-    argv = [
-        "route",
-        "--seed",
-        str(seed),
-        "--edition",
-        edition,
-        "--version",
-        version,
-        "--from",
-        str(from_x),
-        str(from_z),
-        "--structure",
-        _structures_arg(structures) or "village,trial_chamber,stronghold",
-        "--radius",
-        str(radius),
-        "--limit",
-        str(limit),
-    ]
-    _append_optional(argv, "--chunk-version", chunk_version)
-    _append_optional(argv, "--backend", backend)
-    _append_optional(argv, "--timeout", timeout)
-    if explain:
-        argv.append("--explain")
-    return run_cli_command(argv)
+    return route_response(
+        RouteQueryRequest(
+            seed=seed,
+            edition=edition,
+            version=version,
+            chunk_version=chunk_version,
+            origin=(from_x, from_z),
+            structures=structures,
+            radius=radius,
+            limit=limit,
+            backend=backend,
+            timeout=timeout,
+            explain=explain,
+        )
+    ).to_dict()
 
 
 def seed_info_payload(
@@ -210,25 +159,20 @@ def seed_info_payload(
     explain: bool = False,
     backend: str = "cubiomes",
 ) -> dict[str, Any]:
-    argv = [
-        "seed-info",
-        "--seed",
-        str(seed),
-        "--edition",
-        edition,
-        "--version",
-        version,
-    ]
-    if structures:
-        argv.extend(["--structure", _structures_arg(structures) or ""])
-    _append_optional(argv, "--backend", backend)
-    if explain:
-        argv.append("--explain")
-    return run_cli_command(argv)
+    return seed_info_response(
+        SeedInfoRequest(
+            seed=seed,
+            edition=edition,
+            version=version,
+            structures=structures,
+            explain=explain,
+            backend=backend,
+        )
+    ).to_dict()
 
 
 def import_save_payload(path: str) -> dict[str, Any]:
-    return run_cli_command(["import-save", path])
+    return import_save_response(path).to_dict()
 
 
 def make_error_payload(exc: McfindError) -> dict[str, Any]:

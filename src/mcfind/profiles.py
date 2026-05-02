@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from mcfind.errors import McfindError
-from mcfind.runtime import config_home, ensure_dir
+from mcfind.runtime import config_home, ensure_dir, write_text_atomic
 
 
 def _profiles_path() -> Path:
@@ -20,7 +20,7 @@ def load_profiles() -> dict[str, dict[str, Any]]:
 
 
 def save_profiles(profiles: dict[str, dict[str, Any]]) -> None:
-    _profiles_path().write_text(json.dumps(profiles, indent=2, sort_keys=True))
+    write_text_atomic(_profiles_path(), json.dumps(profiles, indent=2, sort_keys=True))
 
 
 def add_profile(name: str, payload: dict[str, Any]) -> dict[str, Any]:
